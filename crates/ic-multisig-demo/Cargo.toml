@@ -1,0 +1,13 @@
+[package]
+name = "ic-multisig-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false        # prevent accidental `cargo publish`
+
+[lib]
+crate-type = ["cdylib"]      # make Wasm for the IC
+
+[dependencies]
+ic-multisig-voting = { path = "../ic-multisig-voting" }
+candid = "0.10"
+ic-cdk = "0.14"

@@ -1,0 +1,10 @@
+{
+  "dfx": "0.23.0",
+  "canisters": {
+    "demo": {
+      "type": "rust",
+      "package": "ic-multisig-demo",   // Cargo package name (kebab-case)
+      "crate":   "ic_multisig_demo"    // Rust crate id  (snake_case)
+    }
+  }
+}

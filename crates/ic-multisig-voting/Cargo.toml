@@ -1,0 +1,10 @@
+[package]
+name = "ic-multisig-voting"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+
+[dependencies]
+candid = "0.10"
+ic-cdk = "0.14"
+# add others as needed
