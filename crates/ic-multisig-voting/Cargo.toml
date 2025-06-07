@@ -3,8 +3,20 @@ name = "ic-multisig-voting"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
+description = "Generic multisignature voting library for Internet Computer canisters"
+repository = "https://github.com/your-org/ic-multisig-voting"
+keywords = ["internet-computer", "multisig", "voting", "governance"]
+categories = ["cryptography", "data-structures"]
+
+[features]
+default = []
+examples = []  # Enable example storage implementations in docs/examples
 
 [dependencies]
 candid = "0.10"
 ic-cdk = "0.14"
-# add others as needed
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+# For testing examples only
+ic-stable-structures = "0.6"
