@@ -1,3 +1,0 @@
-[workspace]
-members = ["crates/ic-multisig-voting", "crates/ic-multisig-demo"]
-resolver = "2"

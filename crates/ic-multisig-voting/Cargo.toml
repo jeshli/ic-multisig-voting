@@ -14,7 +14,7 @@ examples = []  # Enable example storage implementations in docs/examples
 
 [dependencies]
 candid = "0.10"
-ic-cdk = "0.14"
+ic-cdk = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]

@@ -1,14 +1,7 @@
-// lib.rs - Core multisig voting library
-use candid::{CandidType, Principal};
+// lib.rs - Simplified multisig voting library with byte serialization
+use candid::{CandidType, Decode, Encode, Principal};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-
-mod storage;
-pub use storage::{MultisigStorage, NoStorage, MultisigManager};
-
-// Re-export example storage implementations behind feature flags
-#[cfg(feature = "examples")]
-pub mod examples;
 
 pub type ProposalId = u64;
 
@@ -30,7 +23,7 @@ pub struct Multisig<T> {
     proposals: BTreeMap<ProposalId, Proposal<T>>,
 }
 
-impl<T: CandidType + Clone> Multisig<T> {
+impl<T: CandidType + Clone + for<'de> Deserialize<'de>> Multisig<T> {
     /// Create a new multisig with given owners and approval threshold
     pub fn new(owners: Vec<Principal>, threshold: u8) -> Self {
         assert!(threshold > 0 && threshold as usize <= owners.len(),
@@ -41,6 +34,16 @@ impl<T: CandidType + Clone> Multisig<T> {
             next_id: 0,
             proposals: BTreeMap::new(),
         }
+    }
+
+    /// Serialize to bytes for storage
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        Encode!(self).map_err(|e| format!("Failed to encode multisig: {}", e))
+    }
+
+    /// Deserialize from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        Decode!(bytes, Self).map_err(|e| format!("Failed to decode multisig: {}", e))
     }
 
     /// Propose a new action; returns proposal ID
@@ -142,8 +145,25 @@ impl<T: CandidType + Clone> Multisig<T> {
     }
 }
 
-// Convenience type alias for in-memory usage
-pub type InMemoryMultisig<T> = MultisigManager<T, NoStorage>;
+// Optional: Example of how users can implement Storable trait themselves
+// This is just documentation - users should copy this to their own code
+//
+// use ic_stable_structures::storable::{Bound, Storable};
+//
+// impl<T: CandidType + Clone + for<'de> Deserialize<'de>> Storable for Multisig<T> {
+//     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+//         match self.to_bytes() {
+//             Ok(bytes) => std::borrow::Cow::Owned(bytes),
+//             Err(_) => std::borrow::Cow::Borrowed(&[]), // or panic!, depending on your preference
+//         }
+//     }
+//
+//     fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+//         Self::from_bytes(bytes.as_ref()).unwrap() // or handle error appropriately
+//     }
+//
+//     const BOUND: Bound = Bound::Unbounded;
+// }
 
 #[cfg(test)]
 mod tests {
@@ -161,37 +181,87 @@ mod tests {
     }
 
     #[test]
-    fn test_threshold_enforcement() {
-        // Ultra-simple test to debug the issue
-        let owner = Principal::anonymous();
-        let mut ms = Multisig::<u32>::new(vec![owner], 1);
+    fn test_serialization() {
+        let owners = vec![Principal::anonymous()];
+        let mut ms = Multisig::<u32>::new(owners, 1);
 
-        // This should work fine
-        let proposal_id = ms.propose(owner, 123);
-        println!("Proposal result: {:?}", proposal_id);
+        let id = ms.propose(Principal::anonymous(), 42).unwrap();
 
-        match proposal_id {
-            Ok(id) => {
-                let approval_result = ms.approve(owner, id);
-                println!("Approval result: {:?}", approval_result);
-                // Don't unwrap here - let's see what the actual error is
-                match approval_result {
-                    Ok(Some(value)) => assert_eq!(value, 123),
-                    Ok(None) => panic!("Expected execution but got None"),
-                    Err(e) => panic!("Approval failed: {}", e),
-                }
-            },
-            Err(e) => panic!("Proposal failed: {}", e),
-        }
+        // Serialize to bytes
+        let bytes = ms.to_bytes().unwrap();
+
+        // Deserialize from bytes
+        let mut restored_ms = Multisig::<u32>::from_bytes(&bytes).unwrap();
+
+        // Should be able to approve the proposal
+        let result = restored_ms.approve(Principal::anonymous(), id).unwrap();
+        assert_eq!(result, Some(42));
     }
 
     #[test]
-    fn test_in_memory_manager() {
-        let mut manager = MultisigManager::in_memory(vec![Principal::anonymous()], 1);
+    fn test_round_trip_serialization() {
+        // Create three different principals so we can test partial approval
+        let owner1 = Principal::anonymous();
+        let owner2 = Principal::from_slice(&[1, 2, 3, 4]);
+        let owner3 = Principal::from_slice(&[5, 6, 7, 8]);
+        let owners = vec![owner1, owner2, owner3];
 
-        let id = manager.propose(Principal::anonymous(), 42).unwrap();
-        let result = manager.approve(Principal::anonymous(), id).unwrap();
+        // Set threshold to 3 so proposals don't execute with just 2 approvals
+        let mut ms = Multisig::<String>::new(owners.clone(), 3);
 
+        // Add some proposals
+        let id1 = ms.propose(owner1, "First proposal".to_string()).unwrap();
+        let id2 = ms.propose(owner2, "Second proposal".to_string()).unwrap();
+
+        // Partially approve id1 - should not execute yet (needs 3 approvals, has 2)
+        let approve_result = ms.approve(owner2, id1).unwrap();
+        assert_eq!(approve_result, None); // Should not execute yet
+
+        // Check state before serialization
+        let prop1_before = ms.get_proposal(id1).unwrap();
+        assert_eq!(prop1_before.approvals.len(), 2); // proposer + one approval
+        assert!(!prop1_before.executed);
+
+        // Serialize
+        let bytes = ms.to_bytes().unwrap();
+
+        // Deserialize
+        let restored_ms = Multisig::<String>::from_bytes(&bytes).unwrap();
+
+        // Verify state
+        assert_eq!(restored_ms.get_owners(), &owners.into_iter().collect());
+        assert_eq!(restored_ms.get_threshold(), 3);
+        assert_eq!(restored_ms.list_open().len(), 2); // Both proposals should be open
+
+        let prop1_after = restored_ms.get_proposal(id1).unwrap();
+        assert_eq!(prop1_after.approvals.len(), 2); // proposer + one approval
+        assert!(!prop1_after.executed);
+
+        let prop2_after = restored_ms.get_proposal(id2).unwrap();
+        assert_eq!(prop2_after.approvals.len(), 1); // just proposer
+        assert!(!prop2_after.executed);
+    }
+
+    #[test]
+    fn test_serialization_with_executed_proposal() {
+        let owner = Principal::anonymous();
+        let mut ms = Multisig::<u32>::new(vec![owner], 1);
+
+        // Create and execute a proposal
+        let id = ms.propose(owner, 42).unwrap();
+        let result = ms.approve(owner, id).unwrap();
         assert_eq!(result, Some(42));
+
+        // Serialize
+        let bytes = ms.to_bytes().unwrap();
+
+        // Deserialize
+        let restored_ms = Multisig::<u32>::from_bytes(&bytes).unwrap();
+
+        // Verify executed proposal is preserved
+        let prop = restored_ms.get_proposal(id).unwrap();
+        assert!(prop.executed);
+        assert_eq!(prop.payload, 42);
+        assert_eq!(restored_ms.list_open().len(), 0); // No open proposals
     }
 }
