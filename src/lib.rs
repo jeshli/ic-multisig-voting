@@ -145,25 +145,6 @@ impl<T: CandidType + Clone + for<'de> Deserialize<'de>> Multisig<T> {
     }
 }
 
-// Optional: Example of how users can implement Storable trait themselves
-// This is just documentation - users should copy this to their own code
-//
-// use ic_stable_structures::storable::{Bound, Storable};
-//
-// impl<T: CandidType + Clone + for<'de> Deserialize<'de>> Storable for Multisig<T> {
-//     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-//         match self.to_bytes() {
-//             Ok(bytes) => std::borrow::Cow::Owned(bytes),
-//             Err(_) => std::borrow::Cow::Borrowed(&[]), // or panic!, depending on your preference
-//         }
-//     }
-//
-//     fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-//         Self::from_bytes(bytes.as_ref()).unwrap() // or handle error appropriately
-//     }
-//
-//     const BOUND: Bound = Bound::Unbounded;
-// }
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,17 @@
+{
+  "canisters": {
+    "multisig-demo-backend": {
+      "candid": "src/multisig-demo-backend/multisig-demo-backend.did",
+      "package": "multisig-demo-backend",
+      "type": "rust"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
