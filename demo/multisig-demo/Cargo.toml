@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "src/multisig-demo-backend"
+]
+resolver = "2"

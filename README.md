@@ -1,194 +1,315 @@
-# IC Multisig Voting
+# ic-multisig-voting
 
-A Rust library and demo for implementing multisignature voting mechanisms on the Internet Computer (IC).
-
-## Project Structure
-
-```
-ic-multisig-voting/
-├── crates/
-│   ├── ic-multisig-voting/     # Core library crate
-│   └── ic-multisig-demo/       # Demo canister implementation
-├── Cargo.toml                  # Workspace configuration
-└── README.md
-```
+A lightweight, generic multisignature voting library for Internet Computer canisters.
 
 ## Overview
 
-This project provides a generic multisig voting system where multiple owners can propose and vote on actions. Once a proposal reaches the required threshold of approvals, it automatically executes.
+This library provides a flexible multisig voting mechanism where multiple owners can propose and vote on arbitrary actions. Once a proposal reaches the required threshold of approvals, it automatically executes.
 
-### Key Features
+## Features
 
-- **Generic payload support**: Any Candid-serializable type can be proposed
-- **Configurable threshold**: Set minimum number of approvals required
-- **Auto-execution**: Proposals execute immediately when threshold is met
-- **Re-entrancy protection**: Prevents double execution of proposals
-- **Owner management**: Only designated owners can propose and vote
+- **Generic payload support**: Vote on any Candid-serializable data
+- **Configurable thresholds**: Set minimum approvals required  
+- **Auto-execution**: Proposals execute when threshold is met
+- **Re-entrancy protection**: Prevents double execution
+- **Principal-based ownership**: Uses IC Principal for identity
+- **Byte serialization**: Built-in support for persistent storage
 
 ## Quick Start
 
-### Prerequisites
+### Installation
 
-- [DFX](https://internetcomputer.org/docs/current/developer-docs/setup/install/) 0.23.0+
-- Rust with `wasm32-unknown-unknown` target
+Add to your `Cargo.toml`:
 
-### Building and Deployment
+```toml
+[dependencies]
+ic-multisig-voting = { path = "path/to/ic-multisig-voting" }
+candid = "0.10"
+ic-cdk = "0.16"
+```
 
-1. **Clone and build**:
-   ```bash
-   git clone <your-repo>
-   cd ic-multisig-voting
-   cargo build --target wasm32-unknown-unknown --release
-   ```
+### Basic Usage
 
-2. **Deploy the demo canister**:
-   ```bash
-   cd crates/ic-multisig-demo
-   dfx start --clean --background
-   dfx deploy --argument '(vec {principal "'$(dfx identity get-principal)'"}, 1)'
-   ```
+```rust
+use ic_multisig_voting::{Multisig, Proposal};
+use candid::{CandidType, Principal};
+use serde::{Deserialize, Serialize};
 
-3. **Interact with the canister**:
-   ```bash
-   # Propose a configuration change
-   dfx canister call demo propose_set_config '(record { 
-     max_payload_size = 2048; 
-     allowed_origins = vec {"https://ic0.app"}; 
-     admin_fee = 100 
-   })'
-   
-   # Approve a proposal (replace 0 with actual proposal ID)
-   dfx canister call demo approve '(0)'
-   
-   # List open proposals
-   dfx canister call demo list_proposals
-   
-   # Check current config
-   dfx canister call demo get_config
-   ```
+#[derive(CandidType, Deserialize, Serialize, Clone)]
+pub enum MyPayload {
+    UpdateConfig(String),
+    TransferFunds { to: Principal, amount: u64 },
+}
 
-## Architecture
+// Create a multisig with 3 owners requiring 2 approvals
+let owners = vec![
+    Principal::from_text("owner1").unwrap(),
+    Principal::from_text("owner2").unwrap(), 
+    Principal::from_text("owner3").unwrap(),
+];
+let mut multisig = Multisig::<MyPayload>::new(owners, 2);
 
-### Core Components
+// Owner proposes an action
+let proposal_id = multisig.propose(
+    caller_principal, 
+    MyPayload::UpdateConfig("new_value".to_string())
+)?;
 
-1. **Multisig<T>**: Generic multisig state machine
-2. **Proposal<T>**: Individual proposal with voting state  
-3. **MultisigManager<T, S>**: Optional wrapper with automatic persistence
-4. **MultisigStorage<T>**: Trait for custom storage backends
-5. **Owner management**: Principal-based access control
-6. **Threshold voting**: Configurable approval requirements
+// Other owners vote
+if let Some(action) = multisig.approve(voter_principal, proposal_id)? {
+    // Threshold reached! Execute the action
+    match action {
+        MyPayload::UpdateConfig(value) => {
+            // Apply configuration change
+        },
+        MyPayload::TransferFunds { to, amount } => {
+            // Execute transfer
+        },
+    }
+}
+```
 
-### Storage Options
+## IC Canister Integration
 
-The library supports multiple storage patterns:
+### Thread-Local Storage Pattern
 
-- **Pure in-memory**: Use `Multisig<T>` directly (no persistence)
-- **No-op storage**: Use `MultisigManager<T, NoStorage>` (same as in-memory)
-- **Custom storage**: Implement `MultisigStorage<T>` for your persistence needs
-- **Stable structures**: Use provided examples for IC stable storage
+```rust
+use std::cell::RefCell;
 
-### Workflow
+thread_local! {
+    static MULTISIG: RefCell<Option<Multisig<MyPayload>>> = RefCell::new(None);
+}
 
-1. Owner proposes an action with payload
-2. Other owners vote to approve
-3. When threshold is reached, action executes automatically
-4. Proposal is marked as executed to prevent re-execution
+fn with_multisig<F, R>(f: F) -> Result<R, String>
+where F: FnOnce(&mut Multisig<MyPayload>) -> R 
+{
+    MULTISIG.with(|ms| {
+        match ms.borrow_mut().as_mut() {
+            Some(multisig) => Ok(f(multisig)),
+            None => Err("Multisig not initialized".to_string()),
+        }
+    })
+}
 
-## Crates
+#[ic_cdk::init]
+fn init(owners: Vec<Principal>, threshold: u8) {
+    MULTISIG.with(|ms| {
+        *ms.borrow_mut() = Some(Multisig::new(owners, threshold));
+    });
+}
 
-### ic-multisig-voting
+#[ic_cdk::update]
+fn propose_action(payload: MyPayload) -> Result<u64, String> {
+    let caller = ic_cdk::caller();
+    with_multisig(|ms| ms.propose(caller, payload))
+}
 
-Core library providing the multisig voting primitives. See [crates/ic-multisig-voting/README.md](crates/ic-multisig-voting/README.md) for details.
+#[ic_cdk::update] 
+fn approve_proposal(id: u64) -> Result<String, String> {
+    let caller = ic_cdk::caller();
+    let maybe_payload = with_multisig(|ms| ms.approve(caller, id))?;
+    
+    match maybe_payload {
+        Some(action) => {
+            execute_action(action);
+            Ok(format!("Proposal {} executed", id))
+        }
+        None => Ok(format!("Proposal {} approved, waiting for more votes", id)),
+    }
+}
 
-### ic-multisig-demo  
+#[ic_cdk::query]
+fn list_proposals() -> Result<Vec<Proposal<MyPayload>>, String> {
+    with_multisig(|ms| Ok(ms.list_open().into_iter().cloned().collect()))
+}
+```
 
-Demo canister showcasing configuration management via multisig. See [crates/ic-multisig-demo/README.md](crates/ic-multisig-demo/README.md) for details.
+### Persistence with Stable Storage
 
-## Security Considerations
+```rust
+use ic_stable_structures::storable::{Bound, Storable};
+
+impl<T: CandidType + Clone + for<'de> Deserialize<'de>> Storable for Multisig<T> {
+    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+        match self.to_bytes() {
+            Ok(bytes) => std::borrow::Cow::Owned(bytes),
+            Err(_) => std::borrow::Cow::Borrowed(&[]), // Handle appropriately
+        }
+    }
+
+    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+        Self::from_bytes(bytes.as_ref()).unwrap() // Handle error appropriately
+    }
+
+    const BOUND: Bound = Bound::Unbounded;
+}
+```
+
+## API Reference
+
+### `Multisig<T>`
+
+The main multisig state container.
+
+#### Core Methods
+
+- `new(owners: Vec<Principal>, threshold: u8) -> Self`
+  - Creates new multisig with given owners and approval threshold
+  - Panics if threshold is 0 or exceeds owner count
+
+- `propose(caller: Principal, payload: T) -> Result<ProposalId, String>`  
+  - Creates new proposal with given payload
+  - Caller must be an owner
+  - Proposer automatically approves their own proposal
+  - Returns unique proposal ID
+
+- `approve(caller: Principal, id: ProposalId) -> Result<Option<T>, String>`
+  - Adds caller's approval to proposal
+  - Returns `Some(payload)` if threshold reached and not previously executed
+  - Returns `None` if more approvals needed or already executed
+  - Caller must be an owner
+
+#### Query Methods
+
+- `list_open() -> Vec<&Proposal<T>>` - Returns all unexecuted proposals
+- `get_proposal(id: ProposalId) -> Option<&Proposal<T>>` - Get proposal by ID
+- `get_owners() -> &BTreeSet<Principal>` - Get current owners
+- `get_threshold() -> u8` - Get current threshold
+
+#### Owner Management
+
+- `add_owner(owner: Principal) -> Result<(), String>` - Add new owner
+- `remove_owner(owner: Principal) -> Result<(), String>` - Remove owner (if threshold allows)
+- `set_threshold(new_threshold: u8) -> Result<(), String>` - Change approval threshold
+
+#### Serialization
+
+- `to_bytes(&self) -> Result<Vec<u8>, String>` - Serialize for storage
+- `from_bytes(bytes: &[u8]) -> Result<Self, String>` - Deserialize from storage
+
+### `Proposal<T>`
+
+Individual proposal data structure.
+
+```rust
+pub struct Proposal<T> {
+    pub id: ProposalId,
+    pub payload: T,
+    pub approvals: BTreeSet<Principal>,
+    pub executed: bool,
+}
+```
+
+## Error Handling
+
+All methods return `Result` types with descriptive error messages:
+
+- `"caller is not an owner"` - Non-owner tried to propose/approve
+- `"no such proposal"` - Invalid proposal ID
+- `"already an owner"` - Attempted to add existing owner
+- `"removing owner would violate threshold"` - Can't remove owner if it would make threshold impossible
+- `"invalid threshold"` - Threshold is 0 or exceeds owner count
+
+## Security Features
 
 - **Owner verification**: All operations verify caller is an owner
-- **Re-entrancy protection**: Proposals marked executed before payload execution
+- **Re-entrancy protection**: Proposals marked executed before payload is returned
 - **Immutable execution**: Executed proposals cannot be re-executed
 - **Threshold enforcement**: Strict approval count validation
 
-## Development
+## Example Payload Types
 
-### Usage Patterns
-
-#### Simple In-Memory Usage
+### Configuration Management
 ```rust
-use ic_multisig_voting::Multisig;
+#[derive(CandidType, Deserialize, Serialize, Clone)]
+pub struct Config {
+    pub max_payload_size: u32,
+    pub allowed_origins: Vec<String>,
+}
 
-let mut multisig = Multisig::new(owners, threshold);
-let proposal_id = multisig.propose(caller, payload)?;
-if let Some(action) = multisig.approve(voter, proposal_id)? {
-    // Execute the action
+#[derive(CandidType, Deserialize, Serialize, Clone)]
+pub enum ConfigPayload {
+    UpdateConfig(Config),
+    AddOwner(Principal),
+    RemoveOwner(Principal),
+    ChangeThreshold(u8),
 }
 ```
 
-#### With Storage Manager
+### Asset Management
 ```rust
-use ic_multisig_voting::MultisigManager;
-
-// In-memory (no persistence)
-let mut manager = MultisigManager::in_memory(owners, threshold);
-
-// With custom storage
-let storage = MyCustomStorage::new();
-let mut manager = MultisigManager::with_storage(owners, threshold, storage)?;
+#[derive(CandidType, Deserialize, Serialize, Clone)]
+pub enum AssetPayload {
+    Mint { to: Principal, amount: u64 },
+    Burn { amount: u64 },
+    Freeze { account: Principal },
+    Unfreeze { account: Principal },
+}
 ```
 
-#### Custom Storage Implementation
+### Governance Actions
 ```rust
-use ic_multisig_voting::MultisigStorage;
+#[derive(CandidType, Deserialize, Serialize, Clone)]
+pub enum GovernancePayload {
+    UpgradeCanister { wasm: Vec<u8> },
+    SetController { controller: Principal },
+    UpdateSettings { settings: CanisterSettings },
+}
+```
 
-struct MyStorage;
+## Testing
 
-impl<T> MultisigStorage<T> for MyStorage 
-where T: CandidType + for<'de> Deserialize<'de>
-{
-    type Error = String;
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
     
-    fn save(&mut self, multisig: &Multisig<T>) -> Result<(), Self::Error> {
-        // Your persistence logic
+    #[test]
+    fn test_basic_workflow() {
+        let owners = vec![Principal::anonymous()];
+        let mut ms = Multisig::<u32>::new(owners, 1);
+        
+        let id = ms.propose(Principal::anonymous(), 42).unwrap();
+        let result = ms.approve(Principal::anonymous(), id).unwrap();
+        
+        assert_eq!(result, Some(42));
     }
     
-    fn load(&mut self) -> Result<Option<Multisig<T>>, Self::Error> {
-        // Your loading logic
+    #[test]
+    fn test_serialization_round_trip() {
+        let owners = vec![Principal::anonymous()];
+        let mut ms = Multisig::<String>::new(owners, 1);
+        
+        let _id = ms.propose(Principal::anonymous(), "test".to_string()).unwrap();
+        
+        let bytes = ms.to_bytes().unwrap();
+        let restored = Multisig::<String>::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(ms.get_threshold(), restored.get_threshold());
+        assert_eq!(ms.get_owners(), restored.get_owners());
     }
 }
 ```
 
-### Running Tests
-
+Run tests with:
 ```bash
 cargo test
 ```
 
-### Adding New Payload Types
+## Dependencies
 
-1. Define your payload enum/struct with Candid derive macros
-2. Implement proposal and approval functions for your specific actions
-3. Add execution logic in the approval handler
-
-### Example Custom Payload
-
-```rust
-#[derive(CandidType, Deserialize, Clone)]
-pub enum MyPayload {
-    TransferTokens { to: Principal, amount: u64 },
-    UpdateSettings { new_setting: String },
-}
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
+- `candid` - Candid type serialization
+- `serde` - Serialization framework
+- Standard library collections (`BTreeMap`, `BTreeSet`)
 
 ## License
 
 Licensed under either of Apache License, Version 2.0 or MIT license at your option.
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch  
+3. Add tests for new functionality
+4. Ensure all tests pass
+5. Submit a pull request
