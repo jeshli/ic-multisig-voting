@@ -312,6 +312,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-multisig-voting"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "ic-cdk",
+ "serde",
+]
+
+[[package]]
 name = "ic0"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -361,6 +370,8 @@ dependencies = [
  "candid",
  "ic-cdk",
  "ic-cdk-timers",
+ "ic-multisig-voting",
+ "serde",
 ]
 
 [[package]]
